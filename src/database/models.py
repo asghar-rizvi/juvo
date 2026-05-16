@@ -155,9 +155,8 @@ class ConversationLog(Base):
     agent_response = Column(Text)
     tool_calls = Column(JSONB)
     reasoning = Column(Text)
-    metadata = Column(JSONB)
+    context_metadata = Column(JSONB, name="metadata")
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
-    
     booking = relationship("Booking", back_populates="conversation_logs")
     
     def __repr__(self):

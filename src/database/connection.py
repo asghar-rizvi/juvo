@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from typing import Generator
 import logging
 from config import settings
+from sqlalchemy import text
 
 logging.basicConfig(level=settings.LOG_LEVEL)
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ def get_db_session() -> Session:
 def test_connection() -> bool:
     try:
         with get_db() as db:
-            result = db.execute("SELECT 1")
+            result = db.execute(text("SELECT 1"))
             logger.info("Database connection successful")
             return True
     except Exception as e:
@@ -77,7 +78,7 @@ def test_connection() -> bool:
 def verify_postgis() -> bool:
     try:
         with get_db() as db:
-            result = db.execute("SELECT PostGIS_Version()").scalar()
+            result = db.execute(text("SELECT PostGIS_Version()")).scalar()
             logger.info(f"PostGIS version: {result}")
             return True
     except Exception as e:
