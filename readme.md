@@ -1,4 +1,5 @@
-# Pakistani Service Orchestrator - AI-Powered Informal Economy Platform
+# Juvo
+## A Pakistani Service Orchestrator - AI-Powered Informal Economy Platform
 
 An intelligent service matching system for Pakistan's informal economy, built with Google Vertex AI (Antigravity), Gemini, and PostgreSQL/PostGIS.
 
