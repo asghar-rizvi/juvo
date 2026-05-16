@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from typing import List, Optional, Tuple
 from datetime import date, datetime, time as time_type
+from geoalchemy2 import Geography
 from geoalchemy2.functions import ST_Distance, ST_MakePoint, ST_SetSRID, ST_DWithin
 from decimal import Decimal
 import logging
@@ -68,12 +69,11 @@ class DatabaseTools:
                 Provider.phone,
                 Provider.rating,
                 # Calculate distance in kilometers
-                func.ST_Distance(
+                (func.ST_Distance(
                     Provider.location.cast(Geography(srid=4326)),
                     search_point.cast(Geography(srid=4326))
                 ) / 1000.0
             ).label('distance_km'),
-                # Count available slots
                 func.count(TimeSlot.id).label('available_slots_count')
             ).join(
                 ServiceCategory, 
