@@ -6,6 +6,8 @@ from geoalchemy2 import Geography
 from geoalchemy2.functions import ST_Distance, ST_MakePoint, ST_SetSRID, ST_DWithin
 from decimal import Decimal
 import logging
+import uuid as uuid_module
+
 
 from src.database.models import (
     ServiceCategory, Provider, TimeSlot, Booking, 
@@ -446,6 +448,11 @@ class DatabaseTools:
         Returns:
             Created log entry
         """
+        try:
+            uuid_module.UUID(str(session_id)) 
+        except (ValueError, AttributeError):
+            session_id = str(uuid_module.uuid4())
+                         
         try:
             log_entry = ConversationLog(
                 session_id=session_id,
