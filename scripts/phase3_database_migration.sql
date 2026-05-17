@@ -88,9 +88,13 @@ CREATE TABLE IF NOT EXISTS htl_reservations (
     is_confirmed BOOLEAN DEFAULT false,
     is_expired BOOLEAN DEFAULT false,
     confirmed_at TIMESTAMP,
-    expired_at TIMESTAMP,
-    UNIQUE(time_slot_id, is_confirmed) WHERE is_confirmed = false
+    expired_at TIMESTAMP
 );
+
+-- Partial unique index (PostgreSQL 9.5+)
+CREATE UNIQUE INDEX idx_htl_unique_unconfirmed 
+ON htl_reservations (time_slot_id) 
+WHERE is_confirmed = false;
 
 CREATE INDEX idx_htl_session ON htl_reservations(session_id);
 CREATE INDEX idx_htl_user ON htl_reservations(user_id);

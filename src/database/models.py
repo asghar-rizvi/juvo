@@ -110,9 +110,12 @@ class Booking(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     booking_reference = Column(String(50), unique=True, nullable=False)
     session_id = Column(UUID(as_uuid=True), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"))
     user_phone = Column(String(20), nullable=False)
     user_name = Column(String(200))
     provider_id = Column(Integer, ForeignKey("providers.id"), nullable=False)
+    htl_reservation_id = Column(Integer, ForeignKey("htl_reservations.id"))
+
     service_category_id = Column(Integer, ForeignKey("service_categories.id"), nullable=False)
     time_slot_id = Column(Integer, ForeignKey("time_slots.id"), nullable=False)
     location_requested = Column(Geography(geometry_type='POINT', srid=4326))
@@ -134,10 +137,12 @@ class Booking(Base):
         CheckConstraint('user_rating >= 0 AND user_rating <= 5', name='check_user_rating_range'),
     )
     
+    puser = relationship("User", back_populates="bookings")
     provider = relationship("Provider", back_populates="bookings")
     service_category = relationship("ServiceCategory", back_populates="bookings")
     time_slot = relationship("TimeSlot", back_populates="booking")
     conversation_logs = relationship("ConversationLog", back_populates="booking")
+    htl_reservation = relationship("HTLReservation")
     
     def __repr__(self):
         return f"<Booking(id={self.id}, ref='{self.booking_reference}', status={self.status.value})>"
