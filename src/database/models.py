@@ -9,7 +9,8 @@ from geoalchemy2 import Geography
 from datetime import datetime
 import enum
 from src.database.connection import Base
-
+from sqlalchemy.dialects.postgresql import INET, UUID as PG_UUID
+import uuid
 
 # enums that i setup in psql
 class BookingStatus(str, enum.Enum):
@@ -161,3 +162,228 @@ class ConversationLog(Base):
     
     def __repr__(self):
         return f"<ConversationLog(id={self.id}, session={self.session_id}, agent='{self.agent_name}')>"
+    
+    
+    
+"""
+PHASE 3 ADDITIONS: User, Provider Account, HTL, Notifications models
+"""
+# ============================================
+# User Model (Customers)
+# ============================================
+
+class User(Base):
+    """Customer accounts for the Juvo app"""
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    phone = Column(String(20), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    full_name = Column(String(200), nullable=False)
+    profile_picture_url = Column(Text)
+    address = Column(Text)
+    city = Column(String(100))
+    location = Column(Geography(geometry_type='POINT', srid=4326))
+    preferred_language = Column(String(10), default='en')
+    is_active = Column(Boolean, default=True, index=True)
+    is_verified = Column(Boolean, default=False)
+    is_phone_verified = Column(Boolean, default=False)
+    email_verified_at = Column(TIMESTAMP)
+    phone_verified_at = Column(TIMESTAMP)
+    last_login_at = Column(TIMESTAMP)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    bookings = relationship("Booking", back_populates="user")
+    chat_sessions = relationship("ChatSession", back_populates="user")
+    notifications = relationship("Notification", back_populates="user")
+    reviews = relationship("ProviderReview", back_populates="user")
+    htl_reservations = relationship("HTLReservation", back_populates="user")
+    refresh_tokens = relationship("RefreshToken", back_populates="user")
+    
+    def __repr__(self):
+        return f"<User(id={self.id}, email='{self.email}', name='{self.full_name}')>"
+
+
+# ============================================
+# Provider Account Model
+# ============================================
+
+class ProviderAccount(Base):
+    """Service provider login accounts"""
+    __tablename__ = "provider_accounts"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), unique=True, nullable=False)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    is_active = Column(Boolean, default=True)
+    is_verified = Column(Boolean, default=False)
+    email_verified_at = Column(TIMESTAMP)
+    last_login_at = Column(TIMESTAMP)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    provider = relationship("Provider", back_populates="account")
+    notifications = relationship("Notification", back_populates="provider_account")
+    refresh_tokens = relationship("RefreshToken", back_populates="provider_account")
+    
+    def __repr__(self):
+        return f"<ProviderAccount(id={self.id}, email='{self.email}')>"
+
+
+# Update Provider model to add relationship
+# Add this to existing Provider class:
+Provider.account = relationship("ProviderAccount", back_populates="provider", uselist=False)
+
+
+# ============================================
+# Refresh Token Model
+# ============================================
+
+class RefreshToken(Base):
+    """JWT refresh tokens for session management"""
+    __tablename__ = "refresh_tokens"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+    provider_account_id = Column(Integer, ForeignKey("provider_accounts.id", ondelete="CASCADE"))
+    token_hash = Column(String(255), unique=True, nullable=False, index=True)
+    expires_at = Column(TIMESTAMP, nullable=False)
+    is_revoked = Column(Boolean, default=False)
+    revoked_at = Column(TIMESTAMP)
+    user_agent = Column(Text)
+    ip_address = Column(INET)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", back_populates="refresh_tokens")
+    provider_account = relationship("ProviderAccount", back_populates="refresh_tokens")
+    
+    def __repr__(self):
+        return f"<RefreshToken(id={self.id}, user_id={self.user_id}, provider_id={self.provider_account_id})>"
+
+
+# ============================================
+# HTL Reservation Model
+# ============================================
+
+class HTLReservation(Base):
+    """Temporary slot reservations (5 minute hold)"""
+    __tablename__ = "htl_reservations"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(PG_UUID(as_uuid=True), nullable=False, default=uuid.uuid4, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+    provider_id = Column(Integer, ForeignKey("providers.id"))
+    time_slot_id = Column(Integer, ForeignKey("time_slots.id"))
+    reserved_at = Column(TIMESTAMP, default=datetime.utcnow)
+    expires_at = Column(TIMESTAMP, nullable=False, index=True)
+    is_confirmed = Column(Boolean, default=False)
+    is_expired = Column(Boolean, default=False)
+    confirmed_at = Column(TIMESTAMP)
+    expired_at = Column(TIMESTAMP)
+    
+    # Relationships
+    user = relationship("User", back_populates="htl_reservations")
+    provider = relationship("Provider")
+    time_slot = relationship("TimeSlot")
+    
+    def __repr__(self):
+        return f"<HTLReservation(id={self.id}, slot_id={self.time_slot_id}, expires={self.expires_at})>"
+
+
+# Update Booking model to add relationships
+# Add these to existing Booking class:
+Booking.user = relationship("User", back_populates="bookings")
+Booking.htl_reservation = relationship("HTLReservation")
+
+
+# ============================================
+# Notification Model
+# ============================================
+
+class Notification(Base):
+    """In-app notifications for users and providers"""
+    __tablename__ = "notifications"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    provider_account_id = Column(Integer, ForeignKey("provider_accounts.id", ondelete="CASCADE"), index=True)
+    notification_type = Column(String(50), nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    message = Column(Text, nullable=False)
+    data = Column(JSONB)
+    is_read = Column(Boolean, default=False, index=True)
+    read_at = Column(TIMESTAMP)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", back_populates="notifications")
+    provider_account = relationship("ProviderAccount", back_populates="notifications")
+    
+    def __repr__(self):
+        return f"<Notification(id={self.id}, type='{self.notification_type}', read={self.is_read})>"
+
+
+# ============================================
+# Chat Session Model
+# ============================================
+
+class ChatSession(Base):
+    """Active agent conversation sessions"""
+    __tablename__ = "chat_sessions"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(PG_UUID(as_uuid=True), unique=True, nullable=False, default=uuid.uuid4, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    current_step = Column(String(50))
+    intent_data = Column(JSONB)
+    selected_providers = Column(JSONB)
+    context_data = Column(JSONB)
+    is_active = Column(Boolean, default=True, index=True)
+    started_at = Column(TIMESTAMP, default=datetime.utcnow)
+    last_message_at = Column(TIMESTAMP, default=datetime.utcnow)
+    completed_at = Column(TIMESTAMP)
+    
+    # Relationships
+    user = relationship("User", back_populates="chat_sessions")
+    
+    def __repr__(self):
+        return f"<ChatSession(id={self.id}, session_id={self.session_id}, user_id={self.user_id})>"
+
+
+# ============================================
+# Provider Review Model
+# ============================================
+
+class ProviderReview(Base):
+    """User reviews and ratings for providers"""
+    __tablename__ = "provider_reviews"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), unique=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    provider_id = Column(Integer, ForeignKey("providers.id"))
+    rating = Column(DECIMAL(3, 2), nullable=False)
+    review_text = Column(Text)
+    response_text = Column(Text)
+    response_at = Column(TIMESTAMP)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Constraints
+    __table_args__ = (
+        CheckConstraint('rating >= 0 AND rating <= 5', name='check_review_rating_range'),
+    )
+    
+    # Relationships
+    booking = relationship("Booking")
+    user = relationship("User", back_populates="reviews")
+    provider = relationship("Provider")
+    
+    def __repr__(self):
+        return f"<ProviderReview(id={self.id}, provider_id={self.provider_id}, rating={self.rating})>"

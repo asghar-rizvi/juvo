@@ -378,7 +378,7 @@ class DatabaseTools:
                 time_slot_id=time_slot_id,
                 address_requested=address_text,
                 special_instructions=special_instructions,
-                status=BookingStatus.CONFIRMED,
+                status='confirmed',
                 confirmed_at=datetime.utcnow()
             )
             

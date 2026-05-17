@@ -43,3 +43,31 @@ mypy==1.8.0
 
 python-json-logger==2.0.7
 apscheduler==3.10.4
+
+
+# Phase 3
+# FastAPI & Server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.1.2
+email-validator==2.1.0
+
+# Redis for caching
+redis==5.0.1
+
+# Rate limiting
+slowapi==0.1.9
+
+# CORS
+fastapi-cors==0.0.6
+
+# Pagination
+fastapi-pagination==0.12.14
+
+# Background tasks
+celery==5.3.4
