@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, UUID4
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
+from datetime import date, time as time_type
 
 
 class ChatStep(str, Enum):
@@ -16,6 +17,7 @@ class ChatStep(str, Enum):
     HTL_RESERVED = "htl_reserved"
     BOOKING_CONFIRMED = "booking_confirmed"
     COMPLETED = "completed"
+    CONFIRMING = "confirming"
 
 
 class ChatStartRequest(BaseModel):
@@ -49,8 +51,14 @@ class ChatMessageRequest(BaseModel):
     }
 
 
+class TimeSlotOption(BaseModel):
+    slot_id: int
+    slot_date: date
+    slot_time: time_type
+    duration_minutes: int
+
 class ProviderOption(BaseModel):
-    """Provider shown to user in chat"""
+    """Provider option shown to user with time slots"""
     provider_id: int
     name: str
     distance_km: float
@@ -59,6 +67,7 @@ class ProviderOption(BaseModel):
     phone: str
     price_range: Optional[str]
     available_slots_count: int
+    time_slots: List[TimeSlotOption] = [] 
 
 
 class ChatResponse(BaseModel):

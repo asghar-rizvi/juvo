@@ -5,12 +5,13 @@ from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import uuid
+import re
 
 from src.database.models import ChatSession, User
 from src.agents.intent_agent import IntentAgent
 from src.agents.discovery_agent import ProviderDiscoveryAgent
 from src.models.chat import (
-    ChatResponse, ChatStep, ProviderOption
+    ChatResponse, ChatStep, ProviderOption, TimeSlotOption
 )
 from src.models import ServiceIntent
 from src.utils.gemini_client import get_gemini_client
@@ -34,15 +35,7 @@ class ChatService:
     def start_chat(self, user: User, initial_message: Optional[str] = None) -> ChatResponse:
         """
         Start new chat session
-        
-        Args:
-            user: Current user
-            initial_message: Optional first message
-        
-        Returns:
-            ChatResponse with session details
         """
-        # Create chat session
         session_id = uuid.uuid4()
         
         chat_session = ChatSession(
@@ -60,11 +53,9 @@ class ChatService:
         
         logger.info(f"Started chat session {session_id} for user {user.id}")
         
-        # If initial message provided, process it
         if initial_message:
             return self.process_message(chat_session, user, initial_message)
         
-        # Otherwise, send welcome message
         welcome_message = self._generate_welcome_message(user.preferred_language)
         
         return ChatResponse(
@@ -80,22 +71,11 @@ class ChatService:
         user: User, 
         message: str
     ) -> ChatResponse:
-        """
-        Process user message and return agent response
-        
-        Args:
-            chat_session: Current chat session
-            user: Current user
-            message: User's message
-        
-        Returns:
-            ChatResponse with agent reply
-        """
+        """Process user message and return agent response"""
         current_step = chat_session.current_step
         
         logger.info(f"Processing message in step {current_step}: {message[:50]}")
         
-        # Route to appropriate handler based on current step
         if current_step == ChatStep.INITIAL.value:
             return self._handle_initial_intent(chat_session, user, message)
         
@@ -105,8 +85,10 @@ class ChatService:
         elif current_step == ChatStep.PROVIDERS_SHOWN.value:
             return self._handle_provider_selection(chat_session, user, message)
         
+        elif current_step == ChatStep.PROVIDER_SELECTED.value:
+            return self._handle_booking_confirmation(chat_session, user, message)
+        
         else:
-            # Fallback
             return ChatResponse(
                 session_id=chat_session.session_id,
                 current_step=ChatStep(current_step),
@@ -121,9 +103,7 @@ class ChatService:
         message: str
     ) -> ChatResponse:
         """Extract intent from user's initial message"""
-        
         try:
-            # Use Intent Agent from Phase 2
             intent_result = self.intent_agent.process_input_sync(
                 user_input=message,
                 session_id=str(chat_session.session_id)
@@ -131,13 +111,11 @@ class ChatService:
             
             intent: ServiceIntent = intent_result['intent']
             
-            # Store intent in chat session
             chat_session.intent_data = intent.model_dump(mode='json')
             chat_session.current_step = ChatStep.INTENT_EXTRACTED.value
             chat_session.last_message_at = datetime.utcnow()
             self.db.commit()
             
-            # Generate confirmation message
             confirm_message = self._generate_intent_confirmation(intent)
             
             return ChatResponse(
@@ -165,15 +143,11 @@ class ChatService:
         message: str
     ) -> ChatResponse:
         """Handle user confirming intent or modifying it"""
-        
         message_lower = message.lower()
         
-        # Check if user confirms
         if any(word in message_lower for word in ['yes', 'haan', 'theek', 'ok', 'correct']):
-            # Proceed to provider discovery
             return self._search_providers(chat_session, user)
         
-        # Check if user wants to modify
         elif any(word in message_lower for word in ['no', 'nahi', 'change', 'different']):
             chat_session.current_step = ChatStep.INITIAL.value
             self.db.commit()
@@ -186,28 +160,63 @@ class ChatService:
             )
         
         else:
-            # Treat as new intent
             return self._handle_initial_intent(chat_session, user, message)
     
+    def _generate_provider_with_slots_message(self, providers: List[dict], preferred_date) -> str:
+        """Generate message showing providers with their time slots"""
+        
+        message = f"📋 **Available Providers for {preferred_date}:**\n\n"
+        
+        for i, provider in enumerate(providers, 1):
+            message += f"**{i}. {provider['name']}**\n"
+            message += f"   ⭐ Rating: {provider['rating']} ({provider['total_reviews']} reviews)\n"
+            message += f"   📍 Distance: {provider['distance_km']} km\n"
+            message += f"   💰 Price: {provider.get('price_range', 'Call for quote')}\n"
+            message += f"   ✅ Verified: {'Yes' if provider.get('is_verified', False) else 'No'}\n"
+            
+            time_slots = provider.get('time_slots', [])
+            if time_slots:
+                message += f"   ⏰ **Available times:**\n"
+                for j, slot in enumerate(time_slots[:5], 1):  # Show max 5 slots
+                    slot_time = slot['slot_time'][:5]  # Get HH:MM
+                    message += f"      Slot {j}: {slot_time}\n"
+            else:
+                message += f"   ⚠️ No slots available on this date\n"
+            
+            message += "\n"
+        
+        message += "💡 **How to book:**\n"
+        message += "   • Type: `provider 1, slot 1` to select Provider 1, Slot 1\n"
+        message += "   • Or: `1,2` for provider 1, slot 2\n"
+        message += "   • Or: `Ali AC at 10:00` to select by name and time\n"
+        
+        return message
+
     def _search_providers(
         self, 
         chat_session: ChatSession, 
         user: User
     ) -> ChatResponse:
-        """Search for providers based on stored intent"""
+        """Search for providers with their available time slots"""
         
         intent_data = chat_session.intent_data
-        
-        # Reconstruct ServiceIntent
         intent = ServiceIntent(**intent_data)
         
-        # Use Discovery Agent from Phase 2
+        logger.info(f"=== SEARCHING PROVIDERS ===")
+        logger.info(f"Service: {intent.service_type}")
+        logger.info(f"Location: {intent.location}")
+        logger.info(f"Preferred date: {intent.preferred_date}")
+        logger.info(f"Preferred time: {intent.preferred_time}")
+        
         discovery_result = self.discovery_agent.find_and_rank_providers_sync(
             intent=intent,
             session_id=str(chat_session.session_id),
             max_distance_km=15.0,
-            max_results=3  # Show top 3
+            max_results=3
         )
+        
+        logger.info(f"Discovery result status: {discovery_result.get('status')}")
+        logger.info(f"Providers found: {len(discovery_result.get('providers', []))}")
         
         if discovery_result['status'] != 'success' or not discovery_result['providers']:
             chat_session.is_active = False
@@ -220,39 +229,70 @@ class ChatService:
                 next_action="Start a new search or try a different location"
             )
         
-        # Convert to ProviderOption
-        providers = [
-            ProviderOption(
-                provider_id=p.provider_id,
-                name=p.name,
-                distance_km=p.distance_km,
-                rating=float(p.rating),
-                total_reviews=p.total_reviews,
-                phone=p.phone,
-                price_range=p.price_range,
-                available_slots_count=p.available_slots_count
-            )
-            for p in discovery_result['providers']
-        ]
+        # Fetch time slots for each provider
+        from src.tools import DatabaseTools
+        tools = DatabaseTools(self.db)
         
-        # Store providers in session
-        chat_session.selected_providers = [p.model_dump() for p in providers]
+        providers_with_slots = []
+        for p in discovery_result['providers']:
+            logger.info(f"--- Checking provider: {p.name} (ID: {p.provider_id}) ---")
+            
+            # Log what slots exist for this provider
+            from src.database.models import TimeSlot
+            all_slots = self.db.query(TimeSlot).filter(
+                TimeSlot.provider_id == p.provider_id
+            ).all()
+            logger.info(f"Total slots in DB for this provider: {len(all_slots)}")
+            for slot in all_slots:
+                logger.info(f"  Slot ID: {slot.id}, Date: {slot.slot_date}, Booked: {slot.is_booked}")
+            
+            # Get slots for preferred date
+            slots = tools.get_available_slots(
+                provider_id=p.provider_id,
+                start_date=intent.preferred_date,
+                end_date=intent.preferred_date,
+                limit=5
+            )
+            
+            logger.info(f"Available slots on {intent.preferred_date}: {len(slots)}")
+            for slot in slots:
+                logger.info(f"  Slot ID: {slot.slot_id}, Time: {slot.slot_time}")
+            
+            providers_with_slots.append({
+                "provider_id": p.provider_id,
+                "name": p.name,
+                "distance_km": p.distance_km,
+                "rating": float(p.rating),
+                "total_reviews": p.total_reviews,
+                "phone": p.phone,
+                "price_range": p.price_range,
+                "available_slots_count": len(slots),
+                "time_slots": [
+                    {
+                        "slot_id": slot.slot_id,
+                        "slot_date": slot.slot_date.isoformat(),
+                        "slot_time": slot.slot_time.strftime('%H:%M:%S'),
+                        "duration_minutes": slot.duration_minutes
+                    }
+                    for slot in slots
+                ]
+            })
+        
+        chat_session.selected_providers = providers_with_slots
         chat_session.current_step = ChatStep.PROVIDERS_SHOWN.value
         chat_session.last_message_at = datetime.utcnow()
         self.db.commit()
         
-        # Generate provider presentation message
-        presentation = self._generate_provider_presentation(
-            providers, 
-            intent.language_detected.value
-        )
+        # Log summary
+        total_slots = sum(len(p['time_slots']) for p in providers_with_slots)
+        logger.info(f"=== SUMMARY: {len(providers_with_slots)} providers, {total_slots} total time slots ===")
         
         return ChatResponse(
             session_id=chat_session.session_id,
             current_step=ChatStep.PROVIDERS_SHOWN,
-            agent_message=presentation,
-            providers=providers,
-            next_action="Select a provider by number (1, 2, 3) or type 'cancel'"
+            agent_message=self._generate_provider_with_slots_message(providers_with_slots, intent.preferred_date),
+            providers=providers_with_slots,
+            next_action="Select a provider and time slot. Example: 'provider 1, slot 1' or 'Ali AC at 10:00'"
         )
     
     def _handle_provider_selection(
@@ -261,13 +301,202 @@ class ChatService:
         user: User, 
         message: str
     ) -> ChatResponse:
-        """Handle user selecting a provider"""
+        """Handle user selecting a provider AND time slot"""
         
+        import re
         message_lower = message.lower().strip()
         
+        logger.info(f"=== PROVIDER SELECTION ===")
+        logger.info(f"Raw message: '{message}'")
+        
         # Check for cancellation
-        if message_lower in ['cancel', 'no', 'nahi']:
+        if message_lower in ['cancel', 'no', 'nahi', 'back']:
             chat_session.is_active = False
+            self.db.commit()
+            return ChatResponse(
+                session_id=chat_session.session_id,
+                current_step=ChatStep.COMPLETED,
+                agent_message="Booking cancelled. Start a new search anytime!",
+                next_action="Start new conversation"
+            )
+        
+        providers = chat_session.selected_providers
+        if not providers:
+            logger.error("No providers in session")
+            return ChatResponse(
+                session_id=chat_session.session_id,
+                current_step=ChatStep.PROVIDERS_SHOWN,
+                agent_message="No providers found. Please start a new search.",
+                next_action="Type 'start over' to begin again"
+            )
+        
+        logger.info(f"Providers available: {len(providers)}")
+        for i, p in enumerate(providers):
+            logger.info(f"  Provider {i+1}: {p.get('name')} - {len(p.get('time_slots', []))} slots")
+        
+        # Parse selection
+        selected_provider_idx = None
+        selected_slot_id = None
+        selected_slot_time = None
+        
+        # Strategy 1: "provider 1, slot 1" or "1,2" or "provider 1 slot 1"
+        numbers = re.findall(r'\d+', message_lower)
+        logger.info(f"Numbers found: {numbers}")
+        
+        if len(numbers) >= 2:
+            provider_num = int(numbers[0]) - 1
+            slot_num = int(numbers[1]) - 1
+            
+            if 0 <= provider_num < len(providers):
+                provider = providers[provider_num]
+                time_slots = provider.get('time_slots', [])
+                if 0 <= slot_num < len(time_slots):
+                    selected_provider_idx = provider_num
+                    selected_slot_id = time_slots[slot_num]['slot_id']
+                    selected_slot_time = time_slots[slot_num]['slot_time']
+                    logger.info(f"Strategy 1 matched: provider {provider_num}, slot {slot_num}, slot_id={selected_slot_id}")
+        
+        # Strategy 2: Just provider number (use first slot)
+        if selected_slot_id is None and len(numbers) == 1:
+            provider_num = int(numbers[0]) - 1
+            if 0 <= provider_num < len(providers):
+                provider = providers[provider_num]
+                time_slots = provider.get('time_slots', [])
+                if time_slots:
+                    selected_provider_idx = provider_num
+                    selected_slot_id = time_slots[0]['slot_id']
+                    selected_slot_time = time_slots[0]['slot_time']
+                    logger.info(f"Strategy 2 matched: provider {provider_num}, using first slot {selected_slot_id}")
+        
+        # Strategy 3: Match by provider name
+        if selected_slot_id is None:
+            for p_idx, provider in enumerate(providers):
+                provider_name = provider.get('name', '').lower()
+                if provider_name in message_lower or message_lower in provider_name:
+                    selected_provider_idx = p_idx
+                    # Try to find time in message
+                    time_match = re.search(r'(\d{1,2}):?(\d{2})?\s*(am|pm)?', message_lower)
+                    if time_match:
+                        time_str = time_match.group(0)
+                        for slot in provider.get('time_slots', []):
+                            if time_str in slot['slot_time']:
+                                selected_slot_id = slot['slot_id']
+                                selected_slot_time = slot['slot_time']
+                                break
+                    # If no time specified, use first slot
+                    if selected_slot_id is None and provider.get('time_slots'):
+                        selected_slot_id = provider['time_slots'][0]['slot_id']
+                        selected_slot_time = provider['time_slots'][0]['slot_time']
+                        logger.info(f"Strategy 3 matched: provider {p_idx} by name, using first slot {selected_slot_id}")
+                    break
+        
+        if selected_provider_idx is None or selected_slot_id is None:
+            logger.warning(f"Could not parse selection: '{message}'")
+            # Return available options
+            options_msg = "Please select using one of these formats:\n\n"
+            for i, p in enumerate(providers[:3], 1):
+                options_msg += f"{i}. {p.get('name')}\n"
+                for j, s in enumerate(p.get('time_slots', [])[:3], 1):
+                    options_msg += f"   Slot {j}: {s['slot_time'][:5]}\n"
+            options_msg += "\nExample: 'provider 1, slot 1' or '1,2'"
+            
+            return ChatResponse(
+                session_id=chat_session.session_id,
+                current_step=ChatStep.PROVIDERS_SHOWN,
+                agent_message=options_msg,
+                providers=providers,
+                next_action="Enter provider number and slot number"
+            )
+        
+        selected_provider = providers[selected_provider_idx]
+        logger.info(f"Selected: {selected_provider['name']}, slot_id={selected_slot_id}, time={selected_slot_time}")
+        
+        # Store selection in session
+        chat_session.context_data = {
+            'selected_provider_id': selected_provider['provider_id'],
+            'selected_provider_name': selected_provider['name'],
+            'selected_time_slot_id': selected_slot_id,
+            'selected_time_slot_time': selected_slot_time
+        }
+        chat_session.current_step = ChatStep.PROVIDER_SELECTED.value
+        chat_session.last_message_at = datetime.utcnow()
+        self.db.commit()
+        
+        # Create HTL reservation
+        from src.services.htl_service import HTLService
+        htl_service = HTLService(self.db)
+        
+        try:
+            htl_result = htl_service.reserve_slot(
+                user=user,
+                session_id=str(chat_session.session_id),
+                provider_id=selected_provider['provider_id'],
+                time_slot_id=selected_slot_id
+            )
+            
+            logger.info(f"HTL created: {htl_result}")
+            
+            return ChatResponse(
+                session_id=chat_session.session_id,
+                current_step=ChatStep.PROVIDER_SELECTED,
+                agent_message=f"""
+    ✅ **5-minute hold created for {selected_provider['name']}!**
+
+    📅 Date: {htl_result.get('slot_date', 'Selected date')}
+    ⏰ Time: {selected_slot_time[:5] if selected_slot_time else 'Selected time'}
+    🕐 Hold expires in: {htl_result.get('time_remaining_seconds', 300)} seconds
+
+    Please type **'confirm'** to complete your booking, or **'cancel'** to release this slot.
+                """.strip(),
+                context_data={
+                    'htl_id': htl_result.get('id'),
+                    'expires_at': htl_result.get('expires_at')
+                },
+                htl_reservation_id=htl_result.get('id'),
+                next_action="Type 'confirm' to book or 'cancel' to release"
+            )
+            
+        except Exception as e:
+            logger.error(f"HTL reservation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            return ChatResponse(
+                session_id=chat_session.session_id,
+                current_step=ChatStep.PROVIDERS_SHOWN,
+                agent_message=f"Sorry, that time slot is no longer available. Please select another one.",
+                providers=providers,
+                next_action="Select a different provider or time slot"
+            )
+            
+    def _handle_booking_confirmation(
+        self,
+        chat_session: ChatSession,
+        user: User,
+        message: str
+    ) -> ChatResponse:
+        """Handle user confirming or cancelling the booking"""
+        
+        message_lower = message.lower().strip()
+        logger.info(f"=== BOOKING CONFIRMATION ===")
+        logger.info(f"Message: '{message_lower}'")
+        
+        context_data = chat_session.context_data or {}
+        htl_id = context_data.get('htl_id')
+        logger.info(f"HTL ID from context: {htl_id}")
+        
+        if message_lower in ['cancel', 'no', 'nahi']:
+            if htl_id:
+                from src.services.htl_service import HTLService
+                htl_service = HTLService(self.db)
+                try:
+                    htl_service.cancel_reservation(user, htl_id)
+                    logger.info(f"Cancelled HTL {htl_id}")
+                except Exception as e:
+                    logger.error(f"Failed to cancel HTL: {e}")
+            
+            chat_session.is_active = False
+            chat_session.completed_at = datetime.utcnow()
             self.db.commit()
             
             return ChatResponse(
@@ -277,79 +506,84 @@ class ChatService:
                 next_action="Start new conversation"
             )
         
-        # Try to extract number
-        try:
-            # Handle various formats: "1", "provider 1", "pehla", etc.
-            selection = None
+        elif message_lower in ['confirm', 'yes', 'haan', 'theek', 'ok']:
+            if not htl_id:
+                logger.error("No HTL ID found in context")
+                return ChatResponse(
+                    session_id=chat_session.session_id,
+                    current_step=ChatStep.PROVIDERS_SHOWN,
+                    agent_message="No pending booking found. Please select a provider and time slot first.",
+                    next_action="Start a new search"
+                )
             
-            if message_lower in ['1', 'first', 'pehla', 'one']:
-                selection = 0
-            elif message_lower in ['2', 'second', 'dusra', 'two']:
-                selection = 1
-            elif message_lower in ['3', 'third', 'teesra', 'three']:
-                selection = 2
-            else:
-                # Try direct number parsing
-                selection = int(message_lower) - 1
+            from src.services.htl_service import HTLService
+            htl_service = HTLService(self.db)
             
-            providers = chat_session.selected_providers
-            
-            if selection < 0 or selection >= len(providers):
-                raise ValueError("Invalid selection")
-            
-            selected_provider = providers[selection]
-            
-            # Store selection
-            chat_session.context_data = {
-                'selected_provider_id': selected_provider['provider_id'],
-                'selected_provider_name': selected_provider['name']
-            }
-            chat_session.current_step = ChatStep.PROVIDER_SELECTED.value
-            chat_session.last_message_at = datetime.utcnow()
-            self.db.commit()
-            
-            # Generate next step message (HTL reservation)
-            next_message = f"""
-Great! You've selected {selected_provider['name']}.
+            try:
+                booking_result = htl_service.confirm_reservation(
+                    user=user,
+                    htl_reservation_id=htl_id,
+                    special_instructions=None
+                )
+                
+                logger.info(f"Booking confirmed: {booking_result}")
+                
+                chat_session.is_active = False
+                chat_session.completed_at = datetime.utcnow()
+                self.db.commit()
+                
+                return ChatResponse(
+                    session_id=chat_session.session_id,
+                    current_step=ChatStep.COMPLETED,
+                    agent_message=f"""
+    ✅ **Booking Confirmed!**
 
-I'll reserve a time slot for you for 5 minutes.
-Please confirm within this time to complete your booking.
+    📋 Booking Reference: **{booking_result.get('booking_reference')}**
+    🆔 Booking ID: {booking_result.get('booking_id')}
 
-Type 'confirm' to proceed with the booking.
-            """.strip()
-            
+    A confirmation has been sent to your phone.
+    You can view your bookings in the app.
+
+    Thank you for using Juvo! 🎉
+                    """.strip(),
+                    context_data={
+                        'booking_id': booking_result.get('booking_id'),
+                        'booking_reference': booking_result.get('booking_reference')
+                    },
+                    booking_id=booking_result.get('booking_id'),
+                    next_action="Start a new conversation for another service"
+                )
+                
+            except Exception as e:
+                logger.error(f"Booking confirmation failed: {e}")
+                import traceback
+                traceback.print_exc()
+                return ChatResponse(
+                    session_id=chat_session.session_id,
+                    current_step=ChatStep.PROVIDER_SELECTED,
+                    agent_message=f"Sorry, failed to confirm booking: {str(e)}. Please try again.",
+                    next_action="Type 'confirm' again or 'cancel'"
+                )
+        
+        else:
             return ChatResponse(
                 session_id=chat_session.session_id,
                 current_step=ChatStep.PROVIDER_SELECTED,
-                agent_message=next_message,
-                next_action="Type 'confirm' to reserve slot or 'back' to choose different provider"
-            )
-            
-        except (ValueError, IndexError) as e:
-            logger.warning(f"Invalid provider selection: {message}")
-            
-            return ChatResponse(
-                session_id=chat_session.session_id,
-                current_step=ChatStep.PROVIDERS_SHOWN,
-                agent_message="Please select a valid provider number (1, 2, or 3)",
-                providers=[ProviderOption(**p) for p in chat_session.selected_providers],
-                next_action="Enter provider number"
+                agent_message="Please type 'confirm' to complete your booking or 'cancel' to release the slot.",
+                next_action="Type 'confirm' or 'cancel'"
             )
     
     def _generate_welcome_message(self, language: str) -> str:
         """Generate welcome message in user's language"""
-        
         messages = {
             'en': "Welcome to Juvo! I'll help you find service providers. What service do you need?",
             'ur': "جوو میں خوش آمدید! میں آپ کو سروس فراہم کرنے والے تلاش کرنے میں مدد کروں گا۔ آپ کو کس سروس کی ضرورت ہے؟",
             'roman_ur': "Juvo mein khush amdeed! Main aap ko service providers dhundne mein madad karunga. Aap ko kis service ki zaroorat hai?"
         }
-        
         return messages.get(language, messages['en'])
     
     def _generate_intent_confirmation(self, intent: ServiceIntent) -> str:
         """Generate intent confirmation message"""
-        
         prompt = f"""
 Generate a friendly confirmation message in {intent.language_detected.value}:
 
@@ -362,49 +596,19 @@ Understood details:
 Ask user to confirm if this is correct.
 Keep it short and conversational.
         """
-        
-        response = self.gemini.conversation_model.generate_content(prompt)
-        return response.text.strip()
-    
-    def _generate_provider_presentation(
-        self, 
-        providers: List[ProviderOption], 
-        language: str
-    ) -> str:
-        """Generate provider list presentation"""
-        
-        provider_list = "\n".join([
-            f"{i+1}. {p.name} - {p.distance_km} km away - {p.rating}⭐ ({p.total_reviews} reviews)"
-            for i, p in enumerate(providers)
-        ])
-        
-        prompt = f"""
-Generate a message in {language} presenting these providers:
-
-{provider_list}
-
-Tell user to select by number.
-Keep it friendly and concise.
-        """
-        
         response = self.gemini.conversation_model.generate_content(prompt)
         return response.text.strip()
     
     def get_chat_history(self, session_id: uuid.UUID, user: User) -> Optional[ChatSession]:
         """Get chat session history"""
-        
-        chat = self.db.query(ChatSession).filter(
+        return self.db.query(ChatSession).filter(
             ChatSession.session_id == session_id,
             ChatSession.user_id == user.id
         ).first()
-        
-        return chat
     
     def end_chat(self, session_id: uuid.UUID, user: User) -> bool:
         """End chat session"""
-        
         chat = self.get_chat_history(session_id, user)
-        
         if not chat:
             return False
         
@@ -413,5 +617,4 @@ Keep it friendly and concise.
         self.db.commit()
         
         logger.info(f"Ended chat session {session_id}")
-        
         return True

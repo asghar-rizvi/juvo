@@ -269,17 +269,17 @@ class ProviderService:
     ) -> TimeSlotListResponse:
         """
         Create multiple time slots for a day
-
-        Args:
-            provider_account: Current provider
-            slot_date: Date for slots
-            start_time: Start time
-            end_time: End time
-            duration_minutes: Duration of each slot
-
-        Returns:
-            TimeSlotListResponse with created slots
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.info(f"=== CREATE TIME SLOTS DEBUG ===")
+        logger.info(f"Provider Account ID: {provider_account.id}")
+        logger.info(f"Provider ID from account: {provider_account.provider_id}")
+        logger.info(f"Slot Date: {slot_date}")
+        logger.info(f"Start Time: {start_time}, End Time: {end_time}")
+        logger.info(f"Duration: {duration_minutes}")
+        
         if slot_date < date.today():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -298,9 +298,13 @@ class ProviderService:
         # Generate slots
         current_dt = datetime.combine(date.today(), start_time)
         end_dt = datetime.combine(date.today(), end_time)
+        
+        logger.info(f"Will create slots from {current_dt} to {end_dt}")
 
         while current_dt < end_dt:
             current_time = current_dt.time()
+            
+            logger.info(f"Checking slot at {current_time}")
 
             # Check for duplicate
             existing = self.db.query(TimeSlot).filter(
@@ -319,16 +323,33 @@ class ProviderService:
                 )
                 self.db.add(slot)
                 created_slots.append(slot)
+                logger.info(f"  Created slot for {current_time}")
             else:
                 skipped += 1
+                logger.info(f"  Slot at {current_time} already exists")
 
             current_dt += timedelta(minutes=duration_minutes)
 
+        logger.info(f"Flushing to database...")
+        self.db.flush()  # This will assign IDs
+        
+        logger.info(f"Committing {len(created_slots)} slots...")
         self.db.commit()
 
         # Refresh all created slots
         for slot in created_slots:
             self.db.refresh(slot)
+            logger.info(f"  Slot ID: {slot.id}, Time: {slot.slot_time}")
+
+        # Verify they were saved
+        verify_slots = self.db.query(TimeSlot).filter(
+            TimeSlot.provider_id == provider_account.provider_id,
+            TimeSlot.slot_date == slot_date
+        ).all()
+        
+        logger.info(f"VERIFICATION: Found {len(verify_slots)} slots in DB for provider {provider_account.provider_id} on {slot_date}")
+        for slot in verify_slots:
+            logger.info(f"  DB Slot: ID={slot.id}, Time={slot.slot_time}, Booked={slot.is_booked}")
 
         logger.info(
             f"Created {len(created_slots)} slots for provider "
@@ -354,7 +375,7 @@ class ProviderService:
             available_count=len(slot_responses),
             booked_count=0
         )
-
+    
     def delete_time_slot(
         self,
         provider_account: ProviderAccount,

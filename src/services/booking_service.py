@@ -43,44 +43,38 @@ class BookingService:
     ) -> BookingResponse:
         """Create booking directly (without HTL)."""
         
+        logger.info(f"=== CREATE BOOKING SERVICE DEBUG ===")
+        logger.info(f"User: {user.id} ({user.email})")
+        logger.info(f"Provider ID: {provider_id}")
+        logger.info(f"Time Slot ID: {time_slot_id}")
+        
         # Validate provider
-        provider = self.db.query(Provider).filter(
-            Provider.id == provider_id
-        ).first()
+        provider = self.db.query(Provider).filter(Provider.id == provider_id).first()
         if not provider:
-            raise HTTPException(
-                status_code=http_status.HTTP_404_NOT_FOUND,
-                detail="Provider not found"
-            )
-
+            raise HTTPException(status_code=404, detail="Provider not found")
+        
         # Validate service category
-        category = self.db.query(ServiceCategory).filter(
-            ServiceCategory.id == service_category_id
-        ).first()
+        category = self.db.query(ServiceCategory).filter(ServiceCategory.id == service_category_id).first()
         if not category:
-            raise HTTPException(
-                status_code=http_status.HTTP_404_NOT_FOUND,
-                detail="Service category not found"
-            )
-
-        # Validate and lock time slot
+            raise HTTPException(status_code=404, detail="Service category not found")
+        
+        # Validate slot exists (but don't lock it - let trigger handle concurrency)
         slot = self.db.query(TimeSlot).filter(
             TimeSlot.id == time_slot_id,
             TimeSlot.provider_id == provider_id
-        ).with_for_update().first()
+        ).first()
         
         if not slot:
-            raise HTTPException(
-                status_code=http_status.HTTP_404_NOT_FOUND,
-                detail="Time slot not found"
-            )
+            raise HTTPException(status_code=404, detail="Time slot not found")
+        
+        # Optional: Check availability for better error message
+        # The trigger will enforce it, but this gives a nicer error
         if slot.is_booked:
-            raise HTTPException(
-                status_code=http_status.HTTP_409_CONFLICT,
-                detail="Time slot already booked"
-            )
-
-        # Create booking using db_tools (which handles everything correctly)
+            raise HTTPException(status_code=409, detail="Time slot already booked")
+        
+        logger.info(f"Slot found: date={slot.slot_date}, time={slot.slot_time}")
+        
+        # Create booking - trigger will handle marking slot as booked
         booking = self.db_tools.create_booking_record(
             session_id=str(uuid.uuid4()),
             user_phone=user.phone,
@@ -93,8 +87,8 @@ class BookingService:
 
         if not booking:
             raise HTTPException(
-                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create booking - slot may have been taken"
+                status_code=http_status.HTTP_409_CONFLICT,
+                detail="This time slot was just booked by someone else. Please select another slot."
             )
 
         # Associate booking with user
@@ -104,7 +98,7 @@ class BookingService:
 
         logger.info(f"Booking {booking.booking_reference} created for user {user.id}")
 
-        # Schedule reminder (non-critical, wrap in try-except)
+        # Schedule reminder (non-critical)
         try:
             from src.agents.followup_agent import FollowUpAgent
             FollowUpAgent().schedule_reminder(

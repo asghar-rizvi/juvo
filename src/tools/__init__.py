@@ -5,6 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 import logging
 import uuid as uuid_module
+import traceback
 
 from src.database.models import (
     ServiceCategory, Provider, TimeSlot, Booking,
@@ -274,19 +275,26 @@ class DatabaseTools:
     ) -> Optional[Booking]:
         """
         Create a new booking record with transaction safety.
-        Automatically marks time slot as booked.
-        
-        FIXED: Now properly handles nullable booking_reference by setting it AFTER insert.
+        The trigger `prevent_double_booking` will automatically mark the slot as booked.
         """
+        
+        import traceback
+        logger.info(f"=== CREATE BOOKING RECORD ===")
+        logger.info(f"time_slot_id: {time_slot_id}")
+        
         try:
-            # Row-lock the slot to prevent double booking
+            # First, check if slot exists (don't lock it, let trigger handle concurrency)
             slot = self.db.query(TimeSlot).filter(
                 TimeSlot.id == time_slot_id
-            ).with_for_update().first()
+            ).first()
 
-            if not slot or slot.is_booked:
-                logger.warning(f"Slot {time_slot_id} not available")
+            if not slot:
+                logger.error(f"Slot {time_slot_id} not found")
                 return None
+            
+            # Don't check is_booked here - the trigger will validate
+            # Just log the current state
+            logger.info(f"Slot found: provider_id={slot.provider_id}, date={slot.slot_date}, time={slot.slot_time}, currently booked={slot.is_booked}")
 
             # Create booking WITHOUT booking_reference first
             booking = Booking(
@@ -298,36 +306,37 @@ class DatabaseTools:
                 time_slot_id=time_slot_id,
                 address_requested=address_text,
                 special_instructions=special_instructions,
-                status=BookingStatus.PENDING,  # FIX: Use PENDING, not CONFIRMED
-                # booking_reference is NOT set here - will be NULL initially
+                status=BookingStatus.PENDING,
             )
 
             if location_coords:
                 lat, lon = location_coords
                 booking.location_requested = f'SRID=4326;POINT({lon} {lat})'
 
-            # Mark slot as booked
-            slot.is_booked = True
-
+            # Add booking - the trigger will:
+            # 1. Check if slot is already booked
+            # 2. Mark slot as booked if available
             self.db.add(booking)
-            self.db.flush()  # This assigns an ID to booking (required for reference)
-
-            # Now generate the booking reference using the ID
+            self.db.flush()  # This triggers the database trigger
+            
+            # Generate booking reference using the ID
             booking.booking_reference = f"BK{datetime.now().strftime('%Y%m%d')}-{str(booking.id).zfill(6)}"
 
             self.db.commit()
             self.db.refresh(booking)
-
-            logger.info(f"Created booking {booking.booking_reference} (status: {booking.status.value})")
+            
+            logger.info(f"Booking created: {booking.booking_reference}")
             return booking
 
         except Exception as e:
             self.db.rollback()
-            logger.error(f"Error creating booking: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            error_msg = str(e)
+            if "Time slot already booked" in error_msg:
+                logger.error(f"Slot {time_slot_id} was already booked by another transaction")
+            else:
+                logger.error(f"Error creating booking: {e}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
             return None
-
     def get_booking_details(self, booking_id: int) -> Optional[Booking]:
         """Get booking details by ID."""
         try:
