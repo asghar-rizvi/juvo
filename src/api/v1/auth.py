@@ -1,14 +1,15 @@
 """
-Authentication endpoints
+Authentication endpoints - Fixed version
 /api/v1/auth/*
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from src.models.auth import (
     UserRegisterRequest, ProviderRegisterRequest,
     LoginRequest, RefreshTokenRequest,
-    AuthResponse, TokenResponse
+    AuthResponse, TokenResponse, UserResponse, ProviderResponse
 )
 from src.services.auth_service import AuthService
 from src.api.dependencies import get_db, CurrentUser, CurrentProvider
@@ -28,7 +29,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
     response_model=AuthResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Register new user",
-    description="Create a new customer account in the Juvo app"
+    description="Create a new customer account"
 )
 def register_user(
     request: UserRegisterRequest,
@@ -36,16 +37,11 @@ def register_user(
 ):
     """
     Register a new user account.
-    
+
     **Requirements:**
-    - Unique email
-    - Unique phone number (Pakistani format: +92XXXXXXXXXX)
-    - Strong password (min 8 chars, uppercase, lowercase, digit)
-    
-    **Returns:**
-    - User profile data
-    - Access token (valid for 30 minutes)
-    - Refresh token (valid for 30 days)
+    - Unique email and phone number
+    - Pakistani phone format (+92XXXXXXXXXX)
+    - Strong password (8+ chars, uppercase, lowercase, digit)
     """
     auth_service = AuthService(db)
     return auth_service.register_user(request)
@@ -54,21 +50,13 @@ def register_user(
 @router.post(
     "/login/user",
     response_model=AuthResponse,
-    summary="User login",
-    description="Login with email and password"
+    summary="User login"
 )
 def login_user(
     request: LoginRequest,
     db: Session = Depends(get_db)
 ):
-    """
-    Login as a customer.
-    
-    **Returns:**
-    - User profile data
-    - Access token
-    - Refresh token
-    """
+    """Login as a customer. Returns tokens and user profile."""
     auth_service = AuthService(db)
     return auth_service.login_user(request.email, request.password)
 
@@ -81,8 +69,7 @@ def login_user(
     "/register/provider",
     response_model=AuthResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Register new service provider",
-    description="Create a new service provider account"
+    summary="Register service provider"
 )
 def register_provider(
     request: ProviderRegisterRequest,
@@ -90,17 +77,9 @@ def register_provider(
 ):
     """
     Register a new service provider.
-    
-    **Requirements:**
-    - Unique email
-    - Unique phone number
-    - Valid service category
-    - Valid address (will be geocoded)
-    
-    **Returns:**
-    - Provider profile data
-    - Access token
-    - Refresh token
+
+    Creates both a Provider (business profile) and
+    ProviderAccount (login credentials).
     """
     auth_service = AuthService(db)
     return auth_service.register_provider(request)
@@ -109,21 +88,13 @@ def register_provider(
 @router.post(
     "/login/provider",
     response_model=AuthResponse,
-    summary="Provider login",
-    description="Login as service provider"
+    summary="Provider login"
 )
 def login_provider(
     request: LoginRequest,
     db: Session = Depends(get_db)
 ):
-    """
-    Login as a service provider.
-    
-    **Returns:**
-    - Provider profile data
-    - Access token
-    - Refresh token
-    """
+    """Login as a service provider. Returns tokens and provider profile."""
     auth_service = AuthService(db)
     return auth_service.login_provider(request.email, request.password)
 
@@ -135,23 +106,13 @@ def login_provider(
 @router.post(
     "/refresh",
     response_model=TokenResponse,
-    summary="Refresh access token",
-    description="Get new access token using refresh token"
+    summary="Refresh access token"
 )
 def refresh_token(
     request: RefreshTokenRequest,
     db: Session = Depends(get_db)
 ):
-    """
-    Refresh access token.
-    
-    Use this endpoint when access token expires.
-    Provide the refresh token to get a new access token.
-    
-    **Returns:**
-    - New access token
-    - New refresh token
-    """
+    """Get a new access token using a valid refresh token."""
     auth_service = AuthService(db)
     return auth_service.refresh_access_token(request.refresh_token)
 
@@ -159,8 +120,7 @@ def refresh_token(
 @router.post(
     "/logout",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Logout",
-    description="Revoke refresh token (logout)"
+    summary="Logout - revoke refresh token"
 )
 def logout(
     request: RefreshTokenRequest,
@@ -168,62 +128,55 @@ def logout(
 ):
     """
     Logout by revoking refresh token.
-    
-    After logout, the refresh token cannot be used.
-    Access token will still be valid until expiry.
+
+    Access token remains valid until expiry (30 min).
+    Refresh token is immediately invalidated.
     """
     auth_service = AuthService(db)
     auth_service.logout(request.refresh_token)
-    return {"message": "Logged out successfully"}
+    # 204 = No Content, no body returned
 
 
 # ============================================
-# Current User Info
+# Current User Profiles
 # ============================================
 
 @router.get(
     "/me/user",
-    response_model=dict,
-    summary="Get current user profile",
-    description="Get authenticated user's profile"
+    response_model=UserResponse,
+    summary="Get current user profile"
 )
 def get_current_user_profile(current_user: CurrentUser):
     """
-    Get current authenticated user's profile.
-    
-    **Requires:** Valid access token in Authorization header
-    
-    **Returns:**
-    - User profile data
+    Get authenticated user's profile.
+
+    **Requires:** `Authorization: Bearer <user_access_token>`
     """
-    from src.models.auth import UserResponse
-    return UserResponse.model_validate(current_user).model_dump()
+    return UserResponse.model_validate(current_user)
 
 
 @router.get(
     "/me/provider",
-    response_model=dict,
-    summary="Get current provider profile",
-    description="Get authenticated provider's profile"
+    response_model=ProviderResponse,
+    summary="Get current provider profile"
 )
 def get_current_provider_profile(current_provider: CurrentProvider):
     """
-    Get current authenticated provider's profile.
-    
-    **Requires:** Valid provider access token
-    
-    **Returns:**
-    - Provider profile data
+    Get authenticated provider's profile.
+
+    **Requires:** `Authorization: Bearer <provider_access_token>`
     """
     provider = current_provider.provider
-    return {
-        "id": current_provider.id,
-        "email": current_provider.email,
-        "provider_id": provider.id,
-        "provider_name": provider.name,
-        "phone": provider.phone,
-        "service_category": provider.service_category.name_en,
-        "rating": float(provider.rating),
-        "total_reviews": provider.total_reviews,
-        "is_verified": current_provider.is_verified
-    }
+    return ProviderResponse(
+        id=current_provider.id,
+        email=current_provider.email,
+        provider_id=provider.id,
+        provider_name=provider.name,
+        phone=provider.phone,
+        service_category=provider.service_category.name_en,
+        address_text=provider.address_text,
+        rating=float(provider.rating),
+        total_reviews=provider.total_reviews,
+        is_verified=current_provider.is_verified,
+        created_at=current_provider.created_at
+    )

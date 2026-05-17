@@ -1,3 +1,8 @@
+"""
+Models package - All Pydantic models
+Phase 2: Agent models (ServiceIntent, ProviderMatch, etc.)
+Phase 4: API models (Auth, Chat, HTL, Booking, Provider)
+"""
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, List, Literal
 from datetime import datetime, date, time as time_type
@@ -6,7 +11,10 @@ from enum import Enum
 import re
 
 
-# Enums
+# ============================================
+# PHASE 2: Core Enums (used by agents)
+# ============================================
+
 class Language(str, Enum):
     """Supported languages"""
     URDU = "ur"
@@ -22,20 +30,23 @@ class BookingStatusEnum(str, Enum):
     CANCELLED = "cancelled"
 
 
-# Request/Response Models
+# ============================================
+# PHASE 2: Agent Models
+# ============================================
+
 class ServiceIntent(BaseModel):
     """
     Extracted user intent from natural language input
     Used by Intent Understanding Agent
     """
     service_type: str = Field(
-        ..., 
+        ...,
         description="Service requested (e.g., 'AC Technician', 'Plumber')",
         min_length=2,
         max_length=100
     )
     location: str = Field(
-        ..., 
+        ...,
         description="Location/area requested (e.g., 'G-13', 'F-7 Islamabad')",
         min_length=2,
         max_length=200
@@ -57,7 +68,7 @@ class ServiceIntent(BaseModel):
         None,
         description="Original user message"
     )
-    
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
@@ -70,7 +81,7 @@ class ServiceIntent(BaseModel):
             }
         }
     )
-    
+
     @field_validator('preferred_date')
     @classmethod
     def validate_future_date(cls, v: date) -> date:
@@ -78,7 +89,7 @@ class ServiceIntent(BaseModel):
         if v < date.today():
             raise ValueError("Service date cannot be in the past")
         return v
-    
+
     @field_validator('location')
     @classmethod
     def clean_location(cls, v: str) -> str:
@@ -90,7 +101,7 @@ class GeoLocation(BaseModel):
     """Geographical coordinates"""
     latitude: float = Field(..., ge=-90, le=90)
     longitude: float = Field(..., ge=-180, le=180)
-    
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
@@ -114,7 +125,7 @@ class ProviderMatch(BaseModel):
     available_slots_count: int = Field(default=0, ge=0)
     is_verified: bool = False
     location: Optional[GeoLocation] = None
-    
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
@@ -140,7 +151,7 @@ class AvailableSlot(BaseModel):
     slot_date: date
     slot_time: time_type
     duration_minutes: int = 60
-    
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
@@ -165,27 +176,21 @@ class BookingRequest(BaseModel):
     location_requested: Optional[GeoLocation] = None
     address_requested: Optional[str] = Field(None, max_length=500)
     special_instructions: Optional[str] = Field(None, max_length=1000)
-    
+
     @field_validator('user_phone')
     @classmethod
     def validate_phone(cls, v: str) -> str:
-        # Remove spaces and dashes
         cleaned = re.sub(r'[\s\-]', '', v)
-        
-        # Add +92 if missing
         if cleaned.startswith('0'):
             cleaned = '+92' + cleaned[1:]
         elif cleaned.startswith('92'):
             cleaned = '+' + cleaned
         elif not cleaned.startswith('+92'):
             raise ValueError("Invalid Pakistani phone number")
-        
-        # Validate format
         if not re.match(r'^\+92[0-9]{10}$', cleaned):
             raise ValueError("Phone number must be in format +92XXXXXXXXXX")
-        
         return cleaned
-    
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
@@ -213,7 +218,7 @@ class BookingConfirmation(BaseModel):
     confirmation_message: str
     status: BookingStatusEnum = BookingStatusEnum.CONFIRMED
     created_at: datetime
-    
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
@@ -225,7 +230,7 @@ class BookingConfirmation(BaseModel):
                 "scheduled_time": "10:00:00",
                 "provider_phone": "+923001234567",
                 "estimated_price": 2500.00,
-                "confirmation_message": "Your booking is confirmed! Ali will arrive at 10:00 AM tomorrow.",
+                "confirmation_message": "Your booking is confirmed!",
                 "status": "confirmed",
                 "created_at": "2024-01-14T15:30:00"
             }
@@ -244,9 +249,9 @@ class ProviderRanking(BaseModel):
     )
     reasoning: str = Field(
         ...,
-        description="Explanation of why providers were ranked this way"
+        description="Explanation of ranking"
     )
-    
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
@@ -256,7 +261,7 @@ class ProviderRanking(BaseModel):
                     "rating_weight": 0.35,
                     "availability_weight": 0.25
                 },
-                "reasoning": "Top provider selected based on: closest distance (2.5 km), high rating (4.8/5), and immediate availability (12 slots)"
+                "reasoning": "Top provider selected based on distance and rating"
             }
         }
     )
@@ -280,7 +285,7 @@ class NearbyProviderResult(BaseModel):
     rating: Decimal
     distance_km: float
     available_slots_count: int
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -295,22 +300,153 @@ class ConversationLogEntry(BaseModel):
     reasoning: Optional[str] = None
     metadata: Optional[dict] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
                 "session_id": "550e8400-e29b-41d4-a716-446655440000",
                 "user_input": "Mujhe kal AC technician chahiye",
                 "user_input_language": "roman_ur",
-                "extracted_intent": {
-                    "service": "AC Technician",
-                    "time": "tomorrow"
-                },
                 "agent_name": "IntentAgent",
-                "agent_response": "I understand you need an AC technician tomorrow.",
-                "tool_calls": {"function": "extract_intent", "success": True},
-                "reasoning": "Detected Roman Urdu input, extracted service and time",
+                "agent_response": "I understand you need an AC technician.",
                 "created_at": "2024-01-14T15:30:00"
             }
         }
     )
+
+
+# ============================================
+# PHASE 4: API Models - Auth
+# ============================================
+
+from src.models.auth import (
+    UserRegisterRequest,
+    ProviderRegisterRequest,
+    LoginRequest,
+    RefreshTokenRequest,
+    ChangePasswordRequest,
+    TokenResponse,
+    UserResponse,
+    ProviderResponse,
+    AuthResponse,
+)
+
+# ============================================
+# PHASE 4: API Models - Chat
+# ============================================
+
+from src.models.chat import (
+    ChatStartRequest,
+    ChatMessageRequest,
+    ChatResponse,
+    ChatHistoryResponse,
+    ChatStep,
+    ProviderOption,
+)
+
+# ============================================
+# PHASE 4: API Models - HTL
+# ============================================
+
+from src.models.htl import (
+    HTLReserveRequest,
+    HTLConfirmRequest,
+    HTLReservationResponse,
+    HTLListResponse,
+)
+
+# ============================================
+# PHASE 4: API Models - Booking
+# ============================================
+
+from src.models.booking import (
+    BookingCreateRequest,
+    BookingResponse,
+    BookingListResponse,
+    BookingCancelRequest,
+    ReviewCreateRequest,
+    ProviderBookingResponse,
+    BookingStatusUpdateRequest,
+)
+
+# ============================================
+# PHASE 4: API Models - Provider
+# ============================================
+
+from src.models.provider import (
+    TimeSlotCreateRequest,
+    TimeSlotResponse,
+    TimeSlotListResponse,
+    ProviderProfileUpdateRequest,
+    ProviderProfileResponse,
+    ProviderAnalyticsResponse,
+    BookingStatusUpdateRequest as ProviderBookingStatusUpdateRequest,
+    ProviderDashboardResponse,
+)
+
+
+# ============================================
+# __all__ - Everything exported
+# ============================================
+
+__all__ = [
+    # ---- Phase 2: Enums ----
+    "Language",
+    "BookingStatusEnum",
+
+    # ---- Phase 2: Agent Models ----
+    "ServiceIntent",
+    "GeoLocation",
+    "ProviderMatch",
+    "AvailableSlot",
+    "BookingRequest",
+    "BookingConfirmation",
+    "ProviderRanking",
+    "NearbyProviderQuery",
+    "NearbyProviderResult",
+    "ConversationLogEntry",
+
+    # ---- Phase 4: Auth ----
+    "UserRegisterRequest",
+    "ProviderRegisterRequest",
+    "LoginRequest",
+    "RefreshTokenRequest",
+    "ChangePasswordRequest",
+    "TokenResponse",
+    "UserResponse",
+    "ProviderResponse",
+    "AuthResponse",
+
+    # ---- Phase 4: Chat ----
+    "ChatStartRequest",
+    "ChatMessageRequest",
+    "ChatResponse",
+    "ChatHistoryResponse",
+    "ChatStep",
+    "ProviderOption",
+
+    # ---- Phase 4: HTL ----
+    "HTLReserveRequest",
+    "HTLConfirmRequest",
+    "HTLReservationResponse",
+    "HTLListResponse",
+
+    # ---- Phase 4: Booking ----
+    "BookingCreateRequest",
+    "BookingResponse",
+    "BookingListResponse",
+    "BookingCancelRequest",
+    "ReviewCreateRequest",
+    "ProviderBookingResponse",
+    "BookingStatusUpdateRequest",
+
+    # ---- Phase 4: Provider ----
+    "TimeSlotCreateRequest",
+    "TimeSlotResponse",
+    "TimeSlotListResponse",
+    "ProviderProfileUpdateRequest",
+    "ProviderProfileResponse",
+    "ProviderAnalyticsResponse",
+    "ProviderBookingStatusUpdateRequest",
+    "ProviderDashboardResponse",
+]
