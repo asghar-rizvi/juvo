@@ -57,7 +57,7 @@ venv\Scripts\activate
 # Install dependencies
 pip install -r requirements.txt
 
-
+```
 
 ### **✅ Phase 3: Authentication & User Management (100% Complete)**
 
