@@ -76,11 +76,13 @@ class ChatService:
         
         logger.info(f"Processing message in step {current_step}: {message[:50]}")
         
+        # NEW: Skip confirmation - go directly to provider search
         if current_step == ChatStep.INITIAL.value:
-            return self._handle_initial_intent(chat_session, user, message)
+            return self._handle_initial_intent_and_search(chat_session, user, message)
         
         elif current_step == ChatStep.INTENT_EXTRACTED.value:
-            return self._handle_intent_confirmation(chat_session, user, message)
+            # Redirect to provider search directly (no confirmation needed)
+            return self._search_providers(chat_session, user)
         
         elif current_step == ChatStep.PROVIDERS_SHOWN.value:
             return self._handle_provider_selection(chat_session, user, message)
@@ -96,13 +98,79 @@ class ChatService:
                 next_action="Please describe the service you need"
             )
     
-    def _handle_initial_intent(
+    # def _handle_initial_intent(
+    #     self, 
+    #     chat_session: ChatSession, 
+    #     user: User, 
+    #     message: str
+    # ) -> ChatResponse:
+    #     """Extract intent from user's initial message"""
+    #     try:
+    #         intent_result = self.intent_agent.process_input_sync(
+    #             user_input=message,
+    #             session_id=str(chat_session.session_id)
+    #         )
+            
+    #         intent: ServiceIntent = intent_result['intent']
+            
+    #         chat_session.intent_data = intent.model_dump(mode='json')
+    #         chat_session.current_step = ChatStep.INTENT_EXTRACTED.value
+    #         chat_session.last_message_at = datetime.utcnow()
+    #         self.db.commit()
+            
+    #         confirm_message = self._generate_intent_confirmation(intent)
+            
+    #         return ChatResponse(
+    #             session_id=chat_session.session_id,
+    #             current_step=ChatStep.INTENT_EXTRACTED,
+    #             agent_message=confirm_message,
+    #             intent=intent.model_dump(mode='json'),
+    #             next_action="Reply 'yes' to search for providers, or provide more details"
+    #         )
+            
+    #     except Exception as e:
+    #         logger.error(f"Intent extraction failed: {str(e)}")
+            
+    #         return ChatResponse(
+    #             session_id=chat_session.session_id,
+    #             current_step=ChatStep.INITIAL,
+    #             agent_message="Sorry, I didn't understand that. Can you tell me what service you need and where?",
+    #             next_action="Example: 'I need an AC technician tomorrow in G-13'"
+    #         )
+    
+    # def _handle_intent_confirmation(
+    #     self, 
+    #     chat_session: ChatSession, 
+    #     user: User, 
+    #     message: str
+    # ) -> ChatResponse:
+    #     """Handle user confirming intent or modifying it"""
+    #     message_lower = message.lower()
+        
+    #     if any(word in message_lower for word in ['yes', 'haan', 'theek', 'ok', 'correct']):
+    #         return self._search_providers(chat_session, user)
+        
+    #     elif any(word in message_lower for word in ['no', 'nahi', 'change', 'different']):
+    #         chat_session.current_step = ChatStep.INITIAL.value
+    #         self.db.commit()
+            
+    #         return ChatResponse(
+    #             session_id=chat_session.session_id,
+    #             current_step=ChatStep.INITIAL,
+    #             agent_message="Okay, let's start again. What service do you need?",
+    #             next_action="Describe your service requirement"
+    #         )
+        
+    #     else:
+    #         return self._handle_initial_intent(chat_session, user, message)
+    
+    def _handle_initial_intent_and_search(
         self, 
         chat_session: ChatSession, 
         user: User, 
         message: str
     ) -> ChatResponse:
-        """Extract intent from user's initial message"""
+        """Extract intent and immediately search for providers (no confirmation)"""
         try:
             intent_result = self.intent_agent.process_input_sync(
                 user_input=message,
@@ -111,20 +179,23 @@ class ChatService:
             
             intent: ServiceIntent = intent_result['intent']
             
+            # Check if intent is valid
+            if intent.location == "Unknown" or intent.service_type == "General Service":
+                return ChatResponse(
+                    session_id=chat_session.session_id,
+                    current_step=ChatStep.INITIAL,
+                    agent_message="I couldn't understand your request. Please tell me:\n- What service you need\n- Your location (e.g., G-13, F-10)\n- When you need it",
+                    next_action="Example: 'I need an AC technician tomorrow in G-13'"
+                )
+            
+            # Store intent and go directly to provider search
             chat_session.intent_data = intent.model_dump(mode='json')
             chat_session.current_step = ChatStep.INTENT_EXTRACTED.value
             chat_session.last_message_at = datetime.utcnow()
             self.db.commit()
             
-            confirm_message = self._generate_intent_confirmation(intent)
-            
-            return ChatResponse(
-                session_id=chat_session.session_id,
-                current_step=ChatStep.INTENT_EXTRACTED,
-                agent_message=confirm_message,
-                intent=intent.model_dump(mode='json'),
-                next_action="Reply 'yes' to search for providers, or provide more details"
-            )
+            # Immediately search for providers
+            return self._search_providers(chat_session, user)
             
         except Exception as e:
             logger.error(f"Intent extraction failed: {str(e)}")
@@ -135,33 +206,7 @@ class ChatService:
                 agent_message="Sorry, I didn't understand that. Can you tell me what service you need and where?",
                 next_action="Example: 'I need an AC technician tomorrow in G-13'"
             )
-    
-    def _handle_intent_confirmation(
-        self, 
-        chat_session: ChatSession, 
-        user: User, 
-        message: str
-    ) -> ChatResponse:
-        """Handle user confirming intent or modifying it"""
-        message_lower = message.lower()
-        
-        if any(word in message_lower for word in ['yes', 'haan', 'theek', 'ok', 'correct']):
-            return self._search_providers(chat_session, user)
-        
-        elif any(word in message_lower for word in ['no', 'nahi', 'change', 'different']):
-            chat_session.current_step = ChatStep.INITIAL.value
-            self.db.commit()
             
-            return ChatResponse(
-                session_id=chat_session.session_id,
-                current_step=ChatStep.INITIAL,
-                agent_message="Okay, let's start again. What service do you need?",
-                next_action="Describe your service requirement"
-            )
-        
-        else:
-            return self._handle_initial_intent(chat_session, user, message)
-    
     def _generate_provider_with_slots_message(self, providers: List[dict], preferred_date) -> str:
         """Generate message showing providers with their time slots"""
         
@@ -309,17 +354,6 @@ class ChatService:
         logger.info(f"=== PROVIDER SELECTION ===")
         logger.info(f"Raw message: '{message}'")
         
-        # Check for cancellation
-        if message_lower in ['cancel', 'no', 'nahi', 'back']:
-            chat_session.is_active = False
-            self.db.commit()
-            return ChatResponse(
-                session_id=chat_session.session_id,
-                current_step=ChatStep.COMPLETED,
-                agent_message="Booking cancelled. Start a new search anytime!",
-                next_action="Start new conversation"
-            )
-        
         providers = chat_session.selected_providers
         if not providers:
             logger.error("No providers in session")
@@ -327,21 +361,14 @@ class ChatService:
                 session_id=chat_session.session_id,
                 current_step=ChatStep.PROVIDERS_SHOWN,
                 agent_message="No providers found. Please start a new search.",
-                next_action="Type 'start over' to begin again"
+                next_action="Type your service request"
             )
         
-        logger.info(f"Providers available: {len(providers)}")
-        for i, p in enumerate(providers):
-            logger.info(f"  Provider {i+1}: {p.get('name')} - {len(p.get('time_slots', []))} slots")
-        
         # Parse selection
+        numbers = re.findall(r'\d+', message_lower)
+        
         selected_provider_idx = None
         selected_slot_id = None
-        selected_slot_time = None
-        
-        # Strategy 1: "provider 1, slot 1" or "1,2" or "provider 1 slot 1"
-        numbers = re.findall(r'\d+', message_lower)
-        logger.info(f"Numbers found: {numbers}")
         
         if len(numbers) >= 2:
             provider_num = int(numbers[0]) - 1
@@ -353,111 +380,64 @@ class ChatService:
                 if 0 <= slot_num < len(time_slots):
                     selected_provider_idx = provider_num
                     selected_slot_id = time_slots[slot_num]['slot_id']
-                    selected_slot_time = time_slots[slot_num]['slot_time']
-                    logger.info(f"Strategy 1 matched: provider {provider_num}, slot {slot_num}, slot_id={selected_slot_id}")
-        
-        # Strategy 2: Just provider number (use first slot)
-        if selected_slot_id is None and len(numbers) == 1:
-            provider_num = int(numbers[0]) - 1
-            if 0 <= provider_num < len(providers):
-                provider = providers[provider_num]
-                time_slots = provider.get('time_slots', [])
-                if time_slots:
-                    selected_provider_idx = provider_num
-                    selected_slot_id = time_slots[0]['slot_id']
-                    selected_slot_time = time_slots[0]['slot_time']
-                    logger.info(f"Strategy 2 matched: provider {provider_num}, using first slot {selected_slot_id}")
-        
-        # Strategy 3: Match by provider name
-        if selected_slot_id is None:
-            for p_idx, provider in enumerate(providers):
-                provider_name = provider.get('name', '').lower()
-                if provider_name in message_lower or message_lower in provider_name:
-                    selected_provider_idx = p_idx
-                    # Try to find time in message
-                    time_match = re.search(r'(\d{1,2}):?(\d{2})?\s*(am|pm)?', message_lower)
-                    if time_match:
-                        time_str = time_match.group(0)
-                        for slot in provider.get('time_slots', []):
-                            if time_str in slot['slot_time']:
-                                selected_slot_id = slot['slot_id']
-                                selected_slot_time = slot['slot_time']
-                                break
-                    # If no time specified, use first slot
-                    if selected_slot_id is None and provider.get('time_slots'):
-                        selected_slot_id = provider['time_slots'][0]['slot_id']
-                        selected_slot_time = provider['time_slots'][0]['slot_time']
-                        logger.info(f"Strategy 3 matched: provider {p_idx} by name, using first slot {selected_slot_id}")
-                    break
         
         if selected_provider_idx is None or selected_slot_id is None:
-            logger.warning(f"Could not parse selection: '{message}'")
-            # Return available options
-            options_msg = "Please select using one of these formats:\n\n"
-            for i, p in enumerate(providers[:3], 1):
-                options_msg += f"{i}. {p.get('name')}\n"
-                for j, s in enumerate(p.get('time_slots', [])[:3], 1):
-                    options_msg += f"   Slot {j}: {s['slot_time'][:5]}\n"
-            options_msg += "\nExample: 'provider 1, slot 1' or '1,2'"
-            
+            # Show options again
             return ChatResponse(
                 session_id=chat_session.session_id,
                 current_step=ChatStep.PROVIDERS_SHOWN,
-                agent_message=options_msg,
+                agent_message=self._generate_provider_with_slots_message(providers, None),
                 providers=providers,
-                next_action="Enter provider number and slot number"
+                next_action="Type 'provider 1, slot 1' to select"
             )
         
         selected_provider = providers[selected_provider_idx]
-        logger.info(f"Selected: {selected_provider['name']}, slot_id={selected_slot_id}, time={selected_slot_time}")
         
-        # Store selection in session
-        chat_session.context_data = {
-            'selected_provider_id': selected_provider['provider_id'],
-            'selected_provider_name': selected_provider['name'],
-            'selected_time_slot_id': selected_slot_id,
-            'selected_time_slot_time': selected_slot_time
-        }
-        chat_session.current_step = ChatStep.PROVIDER_SELECTED.value
-        chat_session.last_message_at = datetime.utcnow()
-        self.db.commit()
-        
-        # Create HTL reservation
-        from src.services.htl_service import HTLService
-        htl_service = HTLService(self.db)
+        # FIX: Create booking DIRECTLY without HTL (simpler flow)
+        from src.services.booking_service import BookingService
+        booking_service = BookingService(self.db)
         
         try:
-            htl_result = htl_service.reserve_slot(
+            # Get service category from intent
+            intent_data = chat_session.intent_data or {}
+            service_category_id = 1  # Default to AC Technician
+            
+            # Create booking directly
+            booking = booking_service.create_booking(
                 user=user,
-                session_id=str(chat_session.session_id),
                 provider_id=selected_provider['provider_id'],
-                time_slot_id=selected_slot_id
+                service_category_id=service_category_id,
+                time_slot_id=selected_slot_id,
+                special_instructions=None
             )
             
-            logger.info(f"HTL created: {htl_result}")
+            # End chat session
+            chat_session.is_active = False
+            chat_session.completed_at = datetime.utcnow()
+            self.db.commit()
             
             return ChatResponse(
                 session_id=chat_session.session_id,
-                current_step=ChatStep.PROVIDER_SELECTED,
+                current_step=ChatStep.COMPLETED,
                 agent_message=f"""
-    ✅ **5-minute hold created for {selected_provider['name']}!**
+    ✅ **Booking Confirmed!**
 
-    📅 Date: {htl_result.get('slot_date', 'Selected date')}
-    ⏰ Time: {selected_slot_time[:5] if selected_slot_time else 'Selected time'}
-    🕐 Hold expires in: {htl_result.get('time_remaining_seconds', 300)} seconds
+    📋 **Booking Reference:** {booking.booking_reference}
+    👤 **Provider:** {selected_provider['name']}
+    ⭐ **Rating:** {selected_provider['rating']} ({selected_provider['total_reviews']} reviews)
+    📅 **Date:** {booking.scheduled_date}
+    ⏰ **Time:** {booking.scheduled_time}
 
-    Please type **'confirm'** to complete your booking, or **'cancel'** to release this slot.
+    A confirmation has been sent to your phone.
+
+    Thank you for using Juvo! 🎉
                 """.strip(),
-                context_data={
-                    'htl_id': htl_result.get('id'),
-                    'expires_at': htl_result.get('expires_at')
-                },
-                htl_reservation_id=htl_result.get('id'),
-                next_action="Type 'confirm' to book or 'cancel' to release"
+                booking_id=booking.id,
+                next_action="Start a new conversation"
             )
             
         except Exception as e:
-            logger.error(f"HTL reservation failed: {e}")
+            logger.error(f"Booking creation failed: {e}")
             import traceback
             traceback.print_exc()
             
