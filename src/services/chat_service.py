@@ -247,26 +247,18 @@ class ChatService:
         intent_data = chat_session.intent_data
         intent = ServiceIntent(**intent_data)
         
-        logger.info(f"=== SEARCHING PROVIDERS ===")
-        logger.info(f"Service: {intent.service_type}")
-        logger.info(f"Location: {intent.location}")
-        logger.info(f"Preferred date: {intent.preferred_date}")
-        logger.info(f"Preferred time: {intent.preferred_time}")
+        logger.info(f"Searching for {intent.service_type} in {intent.location} on {intent.preferred_date}")
         
         discovery_result = self.discovery_agent.find_and_rank_providers_sync(
             intent=intent,
             session_id=str(chat_session.session_id),
             max_distance_km=15.0,
-            max_results=3
+            max_results=5  # Increased to 5 for more options
         )
-        
-        logger.info(f"Discovery result status: {discovery_result.get('status')}")
-        logger.info(f"Providers found: {len(discovery_result.get('providers', []))}")
         
         if discovery_result['status'] != 'success' or not discovery_result['providers']:
             chat_session.is_active = False
             self.db.commit()
-            
             return ChatResponse(
                 session_id=chat_session.session_id,
                 current_step=ChatStep.COMPLETED,
@@ -274,34 +266,19 @@ class ChatService:
                 next_action="Start a new search or try a different location"
             )
         
-        # Fetch time slots for each provider
+        # Fetch time slots for each provider (only 5 slots per provider)
         from src.tools import DatabaseTools
         tools = DatabaseTools(self.db)
         
         providers_with_slots = []
         for p in discovery_result['providers']:
-            logger.info(f"--- Checking provider: {p.name} (ID: {p.provider_id}) ---")
-            
-            # Log what slots exist for this provider
-            from src.database.models import TimeSlot
-            all_slots = self.db.query(TimeSlot).filter(
-                TimeSlot.provider_id == p.provider_id
-            ).all()
-            logger.info(f"Total slots in DB for this provider: {len(all_slots)}")
-            for slot in all_slots:
-                logger.info(f"  Slot ID: {slot.id}, Date: {slot.slot_date}, Booked: {slot.is_booked}")
-            
-            # Get slots for preferred date
+            # Get only 5 slots for the preferred date
             slots = tools.get_available_slots(
                 provider_id=p.provider_id,
                 start_date=intent.preferred_date,
                 end_date=intent.preferred_date,
-                limit=5
+                limit=5  # Limit to 5 time slots per provider
             )
-            
-            logger.info(f"Available slots on {intent.preferred_date}: {len(slots)}")
-            for slot in slots:
-                logger.info(f"  Slot ID: {slot.slot_id}, Time: {slot.slot_time}")
             
             providers_with_slots.append({
                 "provider_id": p.provider_id,
@@ -311,6 +288,7 @@ class ChatService:
                 "total_reviews": p.total_reviews,
                 "phone": p.phone,
                 "price_range": p.price_range,
+                "is_verified": p.is_verified,
                 "available_slots_count": len(slots),
                 "time_slots": [
                     {
@@ -328,18 +306,17 @@ class ChatService:
         chat_session.last_message_at = datetime.utcnow()
         self.db.commit()
         
-        # Log summary
         total_slots = sum(len(p['time_slots']) for p in providers_with_slots)
-        logger.info(f"=== SUMMARY: {len(providers_with_slots)} providers, {total_slots} total time slots ===")
+        logger.info(f"Found {len(providers_with_slots)} providers with {total_slots} time slots")
         
         return ChatResponse(
             session_id=chat_session.session_id,
             current_step=ChatStep.PROVIDERS_SHOWN,
             agent_message=self._generate_provider_with_slots_message(providers_with_slots, intent.preferred_date),
             providers=providers_with_slots,
-            next_action="Select a provider and time slot. Example: 'provider 1, slot 1' or 'Ali AC at 10:00'"
+            next_action="Click on any time slot to book instantly"
         )
-    
+        
     def _handle_provider_selection(
         self, 
         chat_session: ChatSession, 

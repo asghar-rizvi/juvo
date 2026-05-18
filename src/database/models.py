@@ -64,6 +64,7 @@ class Provider(Base):
     service_category_id = Column(Integer, ForeignKey("service_categories.id", ondelete="CASCADE"), nullable=False)
     location            = Column(Geography(geometry_type='POINT', srid=4326), nullable=False)
     address_text        = Column(Text)
+    city                = Column(String(100), nullable=True)
     rating              = Column(DECIMAL(3, 2), default=0.00)
     total_reviews       = Column(Integer, default=0)
     is_available        = Column(Boolean, default=True)

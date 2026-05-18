@@ -185,6 +185,12 @@ class DatabaseTools:
                 TimeSlot.slot_time
             ).limit(limit).all()
 
+            # REMOVE these verbose logs:
+            # for slot in slots:
+            #     logger.info(f"  Slot ID: {slot.id}, Time: {slot.slot_time}")
+            
+            logger.info(f"Found {len(slots)} available slots for provider {provider_id}")
+            
             return [
                 AvailableSlot(
                     slot_id=slot.id,

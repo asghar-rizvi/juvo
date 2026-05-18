@@ -3,13 +3,19 @@ from typing import Optional
 from functools import lru_cache
 
 
-class Settings(BaseSettings):    
-    DATABASE_URL: str
-    POSTGRES_USER: str
-    POSTGRES_PASSWORD: str
-    POSTGRES_DB: str
-    POSTGRES_HOST: str = "localhost"
-    POSTGRES_PORT: int = 5432
+class Settings(BaseSettings):   
+    #local 
+    # DATABASE_URL: str
+    
+    
+    POSTGRES_USER: Optional[str] = None
+    POSTGRES_PASSWORD: Optional[str] = None
+    POSTGRES_DB: Optional[str] = None
+    POSTGRES_HOST: Optional[str] = "localhost"
+    POSTGRES_PORT: Optional[int] = 5432
+    # deployment
+    DATABASE_URL : str
+    DATABASE_URL_SYNC : str
     
     GOOGLE_CLOUD_PROJECT: str
     GOOGLE_APPLICATION_CREDENTIALS: str
