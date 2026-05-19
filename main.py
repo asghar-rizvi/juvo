@@ -200,6 +200,7 @@ def root():
 
 
 @app.get("/health", tags=["System"])
+@app.head("/", tags=["System"]) 
 def health_check():
     """Health check with DB and background task status"""
     from src.database.connection import test_connection
