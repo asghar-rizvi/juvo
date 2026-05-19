@@ -81,6 +81,21 @@ class ChatResponse(BaseModel):
     booking_id: Optional[int] = None
     next_action: Optional[str] = None  # What user should do next
     
+    
+    booking_id: Optional[int] = None
+    booking_reference: Optional[str] = None
+    provider_id: Optional[int] = None
+    provider_name: Optional[str] = None
+    provider_phone: Optional[str] = None
+    provider_rating: Optional[float] = None
+    provider_reviews: Optional[int] = None
+    provider_price_range: Optional[str] = None
+    scheduled_date: Optional[str] = None
+    scheduled_time: Optional[str] = None
+    
+    next_action: Optional[str] = None
+    context_data: Optional[Dict] = None
+    
     model_config = {
         "json_schema_extra": {
             "example": {

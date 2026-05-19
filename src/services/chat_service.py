@@ -393,26 +393,24 @@ class ChatService:
             chat_session.completed_at = datetime.utcnow()
             self.db.commit()
             
+            
             return ChatResponse(
                 session_id=chat_session.session_id,
                 current_step=ChatStep.COMPLETED,
-                agent_message=f"""
-    ✅ **Booking Confirmed!**
-
-    📋 **Booking Reference:** {booking.booking_reference}
-    👤 **Provider:** {selected_provider['name']}
-    ⭐ **Rating:** {selected_provider['rating']} ({selected_provider['total_reviews']} reviews)
-    📅 **Date:** {booking.scheduled_date}
-    ⏰ **Time:** {booking.scheduled_time}
-
-    A confirmation has been sent to your phone.
-
-    Thank you for using Juvo! 🎉
-                """.strip(),
+                agent_message="",  # Empty or can be a simple "Booking confirmed"
+                # Structured data for frontend to build UI
                 booking_id=booking.id,
+                booking_reference=booking.booking_reference,
+                provider_id=selected_provider['provider_id'],
+                provider_name=selected_provider['name'],
+                provider_phone=selected_provider['phone'],
+                provider_rating=selected_provider['rating'],
+                provider_reviews=selected_provider['total_reviews'],
+                provider_price_range=selected_provider['price_range'],
+                scheduled_date=booking.scheduled_date.isoformat() if booking.scheduled_date else None,
+                scheduled_time=booking.scheduled_time.strftime('%H:%M:%S') if booking.scheduled_time else None,
                 next_action="Start a new conversation"
-            )
-            
+            )            
         except Exception as e:
             logger.error(f"Booking creation failed: {e}")
             import traceback
