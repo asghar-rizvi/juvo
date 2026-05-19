@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: juvo-api
+    runtime: python
+    repo: https://github.com/asghar-rizvi/juvo
+    plan: free
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: juvo-db
+          property: connectionString
+      - key: DATABASE_URL_SYNC
+        fromDatabase:
+          name: juvo-db
+          property: connectionString
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: 30
+      - key: TIMEZONE
+        value: Asia/Karachi
+
+databases:
+  - name: juvo-db
+    databaseName: juvo
+    user: postgres
+    plan: free
