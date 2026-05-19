@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     DB_POOL_TIMEOUT: int = 30
     DB_POOL_RECYCLE: int = 3600
     
+    HTL_RESERVATION_MINUTES : int = 5
+    HTL_CLEANUP_INTERVAL_SECONDS : int =60
+    
+    ENABLE_NOTIFICATIONS: bool = True  
+    NOTIFICATION_BATCH_SIZE: int = 100
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

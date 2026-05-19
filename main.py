@@ -327,6 +327,6 @@ if __name__ == "__main__":
         "main:app",
         host=settings.HOST,
         port=settings.PORT,
-        reload=settings.RELOAD,
+        reload= False,
         log_level=settings.LOG_LEVEL.lower()
     )
