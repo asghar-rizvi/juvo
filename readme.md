@@ -123,7 +123,7 @@ Phase 4 completes the service booking system with a **human-in-the-loop** workfl
 
 ```
 User → Chat Interface → AI Agent → Provider Discovery → Time Slot Selection → Instant Booking
-```
+
 
 ### Core Components
 
